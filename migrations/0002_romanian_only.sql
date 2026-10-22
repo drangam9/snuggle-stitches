@@ -1,0 +1,10 @@
+ALTER TABLE products RENAME COLUMN name_ro TO name;
+ALTER TABLE products DROP COLUMN name_en;
+ALTER TABLE products RENAME COLUMN tag_ro TO tag;
+ALTER TABLE products DROP COLUMN tag_en;
+ALTER TABLE products RENAME COLUMN short_ro TO short;
+ALTER TABLE products DROP COLUMN short_en;
+ALTER TABLE products RENAME COLUMN description_ro TO description;
+ALTER TABLE products DROP COLUMN description_en;
+ALTER TABLE products RENAME COLUMN alt_ro TO alt;
+ALTER TABLE products DROP COLUMN alt_en;

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600">
+  <defs>
+    <radialGradient id="back"><stop stop-color="#f7ede0"/><stop offset="1" stop-color="#e3cfba"/></radialGradient>
+    <radialGradient id="yarn" cx=".36" cy=".3" r=".75"><stop stop-color="#dfb494"/><stop offset=".55" stop-color="#c99778"/><stop offset="1" stop-color="#a66f56"/></radialGradient>
+    <radialGradient id="middle" cx=".35" cy=".3" r=".8"><stop stop-color="#e8c1a1"/><stop offset=".65" stop-color="#c89473"/><stop offset="1" stop-color="#ac775c"/></radialGradient>
+    <pattern id="stitches" width="12" height="10" patternUnits="userSpaceOnUse"><path d="m1 2 5 5 5-5M0 8l1 1m10 0 1-1" fill="none" stroke="#805b46" stroke-opacity=".28" stroke-width="1.5"/><path d="m2 1 4 4 4-4" fill="none" stroke="#f6dcc3" stroke-opacity=".5" stroke-width="1.4"/></pattern>
+    <filter id="shadow"><feGaussianBlur stdDeviation="12"/></filter>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".6" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".1"/></feComponentTransfer><feBlend in="SourceGraphic" mode="soft-light"/></filter>
+    <clipPath id="shape"><path d="M300 221C180 150 104 255 120 365c7 69 75 112 180 104 111 8 181-38 183-112 5-105-75-197-183-136Z"/></clipPath>
+  </defs>
+  <path fill="url(#back)" d="M0 0h600v600H0z"/>
+  <path d="M0 424Q300 404 600 429v171H0Z" fill="#eee4d6"/>
+  <path d="M0 457 600 437M0 510l600-30M0 564l600-41" stroke="#d2c3ad" stroke-width="1" opacity=".5"/>
+  <ellipse cx="307" cy="470" rx="177" ry="24" fill="#795d4b" opacity=".2" filter="url(#shadow)"/>
+  <g filter="url(#grain)">
+    <path d="M300 221c-26-66-11-99 9-115 12-10 26-1 19 12-19 29-24 59-10 94" fill="#919476" stroke="#737c60" stroke-width="5"/>
+    <path d="M306 203c-35-46-74-16-52-2 16 9 38-3 32-15" fill="none" stroke="#8b9676" stroke-width="7" stroke-linecap="round"/>
+    <path d="M300 221C180 150 104 255 120 365c7 69 75 112 180 104 111 8 181-38 183-112 5-105-75-197-183-136Z" fill="url(#yarn)"/>
+    <ellipse cx="235" cy="338" rx="75" ry="127" fill="url(#middle)" stroke="#a7775b" stroke-width="2"/>
+    <ellipse cx="370" cy="338" rx="71" ry="126" fill="url(#middle)" stroke="#a7775b" stroke-width="2"/>
+    <ellipse cx="300" cy="343" rx="73" ry="128" fill="url(#middle)" stroke="#ae7a5d" stroke-width="2"/>
+    <g clip-path="url(#shape)"><path d="M100 190h400v300H100Z" fill="url(#stitches)"/></g>
+    <ellipse cx="260" cy="340" rx="7" ry="9" fill="#453c37"/><ellipse cx="342" cy="340" rx="7" ry="9" fill="#453c37"/>
+    <circle cx="258" cy="337" r="2" fill="#f9f3e8"/><circle cx="340" cy="337" r="2" fill="#f9f3e8"/>
+    <path d="M290 360q11 13 23 0" fill="none" stroke="#6c4e43" stroke-width="3" stroke-linecap="round"/>
+    <ellipse cx="243" cy="358" rx="14" ry="7" fill="#d48d80" opacity=".55"/><ellipse cx="359" cy="358" rx="14" ry="7" fill="#d48d80" opacity=".55"/>
+  </g>
+  <path d="m439 180 10 4m-17 7 5 7m23-24 8-5" stroke="#a0a58c" stroke-width="3" stroke-linecap="round"/>
+  <path d="M57 526h143v36H57z" rx="2" fill="#f8f2e7" transform="rotate(-7 120 545)"/>
+  <text x="76" y="550" fill="#8d7867" font-family="Georgia,serif" font-style="italic" font-size="14" transform="rotate(-7 120 545)">hello, cozy season.</text>
+</svg>
