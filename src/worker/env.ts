@@ -1,9 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
 
-export interface Env {
-  DB: D1Database
-  IMAGES: R2Bucket
-  ASSETS: Fetcher
-  ENVIRONMENT: string
+export interface Env extends Omit<WorkerBindings, 'ADMIN_PASSWORD'> {
   ADMIN_PASSWORD?: string
 }

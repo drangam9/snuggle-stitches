@@ -29,5 +29,69 @@
   },
   "observability": {
     "enabled": true
+  },
+  "env": {
+    "staging": {
+      "name": "snuggle-stitches-staging",
+      // Keep Cloudflare Access enabled for all traffic to this Worker.
+      "workers_dev": true,
+      "preview_urls": false,
+      "routes": [],
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": ["/api/*"],
+        "not_found_handling": "single-page-application"
+      },
+      "vars": {
+        "ENVIRONMENT": "staging"
+      },
+      "secrets": {
+        "required": ["ADMIN_PASSWORD"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "snuggle-stitches-staging",
+          "database_id": "7b2a2752-2c08-49bf-96d2-3cb613f0c0a6",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "IMAGES",
+          "bucket_name": "snuggle-stitches-images-staging"
+        }
+      ]
+    },
+    "production": {
+      "name": "snuggle-stitches",
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": ["/api/*"],
+        "not_found_handling": "single-page-application"
+      },
+      "vars": {
+        "ENVIRONMENT": "production"
+      },
+      "secrets": {
+        "required": ["ADMIN_PASSWORD"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "snuggle-stitches",
+          "database_id": "441af5db-31e3-4497-b79d-7fbdb72c7e24",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "IMAGES",
+          "bucket_name": "snuggle-stitches-images"
+        }
+      ]
+    }
   }
 }

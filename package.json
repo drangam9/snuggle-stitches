@@ -13,8 +13,13 @@
     "test:e2e": "playwright test",
     "preview": "vite preview",
     "db:migrate:local": "wrangler d1 migrations apply snuggle-stitches --local",
-    "db:migrate:remote": "wrangler d1 migrations apply snuggle-stitches --remote",
-    "deploy": "npm run build && wrangler deploy"
+    "db:migrate:remote": "npm run db:migrate:staging",
+    "db:migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "db:migrate:production": "wrangler d1 migrations apply DB --env production --remote",
+    "deploy": "npm run deploy:staging",
+    "deploy:staging": "npm run build && wrangler deploy --env staging",
+    "deploy:production": "npm run build && wrangler deploy --env production",
+    "types:worker": "wrangler types src/worker/bindings.d.ts --env staging --env-interface WorkerBindings --include-runtime=false --strict-vars=false"
   },
   "dependencies": {
     "react": "^19.3.1",

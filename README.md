@@ -20,7 +20,7 @@ ENVIRONMENT="local"
 ADMIN_PASSWORD="use-at-least-32-random-characters-here"
 ```
 
-The admin page uses this password locally and in production. After entering it, the Worker sets an HttpOnly session cookie that expires after 12 hours. Build the static assets, then start the Worker and Vite in separate terminals:
+The admin page uses this password locally and in deployed environments. After entering it, the Worker sets an HttpOnly session cookie that expires after 24 hours. Build the static assets, then start the Worker and Vite in separate terminals:
 
 ```sh
 npm run build
@@ -31,7 +31,7 @@ npm run dev:worker
 npm run dev
 ```
 
-Open the local URL printed by Vite. The admin screen is at `/admin.html`; enter the same local token from `.dev.vars`. The Worker serves local D1 and R2 bindings and the Vite server proxies `/api` requests to it. For a production preview:
+Open the local URL printed by Vite. The admin screen is at `/admin.html`; enter the same local password from `.dev.vars`. The Worker serves local D1 and R2 bindings and the Vite server proxies `/api` requests to it. For a frontend-only local build preview (no Worker API):
 
 ```sh
 npm run build
@@ -59,6 +59,90 @@ npm run test:e2e
 
 Browser checks cover desktop and mobile layouts, photo placeholders, local product image loading, Romanian copy, collection filters, modal focus trapping and restoration, Escape/backdrop dismissal, mobile navigation, and both social profile links. Screenshots are written to the ignored test-results directory.
 
+## Staging and production deployments
+
+Staging is a persistent, separately deployed Worker, not a version URL backed by production data. Its D1 database and private R2 bucket have been created separately. No production catalogue or images are copied.
+
+| Resource | Staging | Production |
+| --- | --- | --- |
+| Worker | `snuggle-stitches-staging` | `snuggle-stitches` |
+| D1 database | `snuggle-stitches-staging` | `snuggle-stitches` |
+| R2 image bucket | `snuggle-stitches-images-staging` | `snuggle-stitches-images` |
+| Admin password | Separate staging Worker secret | Existing production Worker secret |
+| Access | Entire staging Worker requires sign-in after setup | Public site; admin requires its password |
+
+`npm run deploy` now targets **staging**, not production. So does the `db:migrate:remote` alias. Direct `wrangler deploy` without `--env` still targets the existing top-level production configuration: use the npm commands or always select the environment explicitly.
+
+### One-time staging initialization
+
+1. Authenticate to the intended Cloudflare account with `npx wrangler whoami`. The resource IDs in [wrangler.jsonc](./wrangler.jsonc) already point to the separate staging database and bucket.
+2. Initialize the new staging database:
+
+   ```sh
+   npm run db:migrate:staging
+   ```
+
+   The shared historical migrations insert six unpublished concept drafts. To honor the empty staging catalogue, clear them **once, immediately after this first initialization, before adding any staging products**:
+
+   ```sh
+   npx wrangler d1 execute DB --env staging --remote --command "DELETE FROM products;"
+   npx wrangler d1 execute DB --env staging --remote --command "SELECT COUNT(*) AS product_count FROM products;"
+   ```
+
+   The count should be zero. Never repeat the DELETE after you start adding staging data, and never change that command to `--env production`. Subsequent deployments apply only pending migrations and do not clear products.
+3. Build and bootstrap the staging Worker:
+
+   ```sh
+   npm run deploy:staging
+   npx wrangler secret put ADMIN_PASSWORD --env staging
+   ```
+
+   Enter a new strong password interactively; do not put it in source code or a command argument. If the first deployment is blocked by `secrets.required`, create the named Worker through the dashboard and set its `ADMIN_PASSWORD` secret there before deploying. Setting a Worker secret creates a deployment; always include `--env staging`.
+
+### Protect staging before enabling its URL
+
+Staging uses `workers_dev: true` after the initial Access setup, with `preview_urls: false` and no custom routes. Keep the entire staging Worker protected by Access. When bootstrapping this setup in another account, set `env.staging.workers_dev` to `false` until the following setup is complete:
+
+1. Enable Cloudflare Zero Trust for the account if needed.
+2. In **Workers & Pages**, select **snuggle-stitches-staging**, then **Access**.
+3. Choose **Protect this Worker behind Access**, select **All traffic**, and attach an Allow policy limited to the people who should review the site. An email allow-list with one-time PIN login is sufficient if you do not want an external identity provider.
+4. Protect **only the staging Worker**. Do not enable account-wide protection, bypass policies, or a rule limited to `/admin.html`: the requirement is to protect the entire staging site, including API requests and static assets.
+5. After applying Access, change only `env.staging.workers_dev` to `true` in [wrangler.jsonc](./wrangler.jsonc), keep `preview_urls: false`, and deploy staging again.
+6. Open `https://snuggle-stitches-staging.<your-account-subdomain>.workers.dev` in an incognito window. Both `/` and `/api/products` must require Access authentication. Check that an allowed reviewer can enter and an unlisted reviewer cannot. After Access sign-in, `/admin.html` still uses the separate staging admin password.
+7. Add a staging test product and image. Verify it appears on staging but not production. Staging edits, deletions, and reordering must never affect the production catalogue.
+
+Wrangler config does not create the Access application or policy. These dashboard steps are required before the URL is private. Disable `env.staging.workers_dev` again and redeploy if protection cannot be verified.
+
+### Automatic GitHub deployment and production approval
+
+The [deployment workflow](./.github/workflows/deploy.yml) runs checks for pull requests to `main`. Pushes to `main` run tests, build the site, and deploy **staging only**. It never deploys production just because a push or merge occurs.
+
+Before enabling deployments:
+
+1. In the GitHub repository, create environments named `staging` and `production`, restricted to `main`.
+2. Add environment-scoped secrets to **each** environment:
+   - `CLOUDFLARE_ACCOUNT_ID`: the account containing that environment's resources.
+   - `CLOUDFLARE_API_TOKEN`: an account-scoped token with access to the intended Worker and its D1 database; include the R2 permissions Wrangler requires to deploy its bucket binding. Use separate, least-privilege tokens where possible. The local Wrangler OAuth login is not available in GitHub Actions.
+3. In the `production` environment, configure **Required reviewers** and disallow administrator bypass where supported. If you are the only reviewer, do not enable Prevent self-review. GitHub plan/repository visibility affects availability of protection rules; if unavailable, the explicit manual promotion described below remains required.
+4. Complete the staging database, admin-secret, and Access setup above. Only then set the staging environment variable `STAGING_READY` to `true`. Deployment fails explicitly until this is set.
+5. If Cloudflare Workers Builds or another existing deployment integration is enabled, disable its direct-to-production automatic deployment. The workflow cannot intercept a second deployment path.
+
+To promote: inspect staging, then open **Actions > Validate and deploy > Run workflow**, choose `main`, and enable the production promotion checkbox. The workflow revalidates that commit and deploys staging first. Only then can its production job proceed, subject to the `production` environment's approval rules. The exact same frontend artifact and source commit are used for staging and production within that run.
+
+The workflow applies pending migrations to the selected database before deployment. Review migration changes carefully: code rollback does not undo database changes or restore R2 objects. Production deployment never copies staging catalogue data.
+
+Explicit local commands are available for operators and **bypass GitHub's approval rules**:
+
+```sh
+npm run deploy:staging
+npm run db:migrate:production
+npm run deploy:production
+```
+
+Regenerate binding types after configuration changes with `npm run types:worker`. Validate packaging without uploading code using `npx wrangler deploy --env staging --dry-run` and `npx wrangler deploy --env production --dry-run`; these do not prove remote resources, secrets, or Access policies are working.
+
+References: [Cloudflare environments](https://developers.cloudflare.com/workers/wrangler/environments/), [protect one Worker with Access](https://developers.cloudflare.com/workers/configuration/cloudflare-access/#protect-one-worker), [Workers GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/), and [GitHub deployment environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+
 ## Product catalogue and Cloudflare setup
 
 - Products are stored in the D1 `products` table. The migrations create six **unpublished** concept drafts; they never appear in the public catalogue unless the owner replaces their concept content and publishes them. The current schema is Romanian-only.
@@ -78,23 +162,23 @@ Browser checks cover desktop and mobile layouts, photo placeholders, local produ
 - Apply the schema:
 
   ```sh
-  npm run db:migrate:remote
+  npm run db:migrate:production
   ```
 
 - Register a `workers.dev` subdomain in the dashboard if the account does not already have one. Deploy once to publish the public site and obtain its URL:
 
   ```sh
-  npm run deploy
+  npm run deploy:production
   ```
 
 - Set a strong, randomly generated admin password as a Worker secret, then deploy:
 
   ```sh
-  npx wrangler secret put ADMIN_PASSWORD
-  npm run deploy
+  npx wrangler secret put ADMIN_PASSWORD --env production
+  npm run deploy:production
   ```
 
-- If you previously configured Cloudflare Access for `/admin.html` or `/api/admin/*`, disable or remove those path rules. They would otherwise redirect to the identity-provider login before the password screen can load. The admin page itself is public, but all product-management API routes remain protected by the Worker password session.
+- For the production site, remove obsolete Cloudflare Access rules limited to `/admin.html` or `/api/admin/*` if you only want the admin password screen. Keep the full-Worker Access protection on staging; it is intentionally separate from the admin password session.
 - The deployment uses the Worker to serve both static assets and the API. To preview the production Worker locally, run `npm run build` and then `npx wrangler dev`; local bindings remain in use unless you explicitly choose remote resources.
 - Before going live, replace the concept drafts and any borrowed product photography with the owner's actual products, copy, and original imagery. The hero and story sections currently use photo placeholders. Contact links open [Instagram](https://www.instagram.com/snuggle_stitchess/) and [TikTok](https://www.tiktok.com/@snuggle.stitchess); the site does not submit orders or process payments.
 - The site is Romanian-only (`lang="ro"` in [index.html](./index.html)); the admin form and product API use a single Romanian set of product fields. Site copy is in [src/i18n.ts](./src/i18n.ts). Global styling is in [src/index.css](./src/index.css) and page styling in [src/App.css](./src/App.css).
