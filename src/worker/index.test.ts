@@ -1,7 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Env } from './env'
-import worker from './index'
+import handler, { PublicCatalog } from './index'
 import type { ProductInput, ProductRecord } from './products'
+
+let ctx: ExecutionContext
+let cachedFetch: ReturnType<typeof vi.fn>
+let purge: ReturnType<typeof vi.fn>
+
+const worker = {
+  fetch(request: Request, bindings: Env) {
+    const withIp = new Request(request)
+    if (!withIp.headers.has('cf-connecting-ip')) withIp.headers.set('cf-connecting-ip', '192.0.2.1')
+    return handler.fetch(withIp, bindings, ctx)
+  },
+}
+
+function rateLimiter(limit: number): RateLimit {
+  const counts = new Map<string, number>()
+  return {
+    limit: vi.fn(async ({ key }: { key: string }) => {
+      const count = (counts.get(key) ?? 0) + 1
+      counts.set(key, count)
+      return { success: count <= limit }
+    }),
+  }
+}
 
 const productInput: ProductInput = {
   name: 'Iepuraș',
@@ -96,7 +119,16 @@ beforeEach(() => {
     ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
     ENVIRONMENT: 'production',
     ADMIN_PASSWORD: 'test-admin-password-with-more-than-thirty-two-characters',
+    LOGIN_LIMITER: rateLimiter(5),
+    ADMIN_LIMITER: rateLimiter(60),
+    PUBLIC_LIMITER: rateLimiter(240),
   }
+  purge = vi.fn(async () => {})
+  cachedFetch = vi.fn((request: Request) => new PublicCatalog(ctx, env).fetch(request))
+  ctx = {
+    exports: { PublicCatalog: { fetch: cachedFetch, purge } },
+    cache: { purge: vi.fn(async () => ({ success: true, errors: [] })), invalidate: vi.fn() },
+  } as unknown as ExecutionContext
 })
 
 function adminRequest(path: string, method = 'GET', body?: BodyInit, headers: Record<string, string> = {}) {
@@ -123,6 +155,116 @@ async function login(password = env.ADMIN_PASSWORD) {
 }
 
 describe('product Worker API', () => {
+  it('rejects the sixth login attempt before password validation, with a retry delay', async () => {
+    for (let index = 0; index < 5; index++) expect((await login('wrong')).status).toBe(401)
+    const response = await login()
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('60')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.has('set-cookie')).toBe(false)
+    expect(env.ADMIN_LIMITER.limit).not.toHaveBeenCalled()
+    expect((await worker.fetch(new Request('https://shop.test/api/admin/session', {
+      method: 'POST',
+      headers: { origin: 'https://shop.test', 'cf-connecting-ip': '192.0.2.2' },
+      body: JSON.stringify({ password: env.ADMIN_PASSWORD }),
+    }), env)).status).toBe(200)
+  })
+
+  it.each([
+    ['/api/admin/products', 60, 401],
+    ['/api/not-found', 240, 404],
+  ])('limits %s at the configured API budget', async (path, limit, initialStatus) => {
+    for (let index = 0; index < limit; index++) {
+      expect((await worker.fetch(new Request(`https://shop.test${path}`), env)).status).toBe(initialStatus)
+    }
+    expect((await worker.fetch(new Request(`https://shop.test${path}`), env)).status).toBe(429)
+  })
+
+  it('limits image API requests but not static assets', async () => {
+    vi.mocked(env.PUBLIC_LIMITER.limit).mockResolvedValue({ success: false })
+    expect((await worker.fetch(new Request('https://shop.test/api/images/products/photo.jpg'), env)).status).toBe(429)
+    expect(env.IMAGES.get).not.toHaveBeenCalled()
+    vi.mocked(env.ASSETS.fetch).mockResolvedValue(new Response('asset'))
+    expect((await worker.fetch(new Request('https://shop.test/admin.html'), env)).status).toBe(200)
+    expect(env.PUBLIC_LIMITER.limit).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires Cloudflare client IP outside local development, ignoring spoofable forwarding headers', async () => {
+    const request = new Request('https://shop.test/api/products', { headers: { 'x-forwarded-for': '192.0.2.10' } })
+    expect((await handler.fetch(request, env, ctx)).status).toBe(400)
+    expect(env.PUBLIC_LIMITER.limit).not.toHaveBeenCalled()
+    env.ENVIRONMENT = 'local'
+    expect((await handler.fetch(request, env, ctx)).status).toBe(200)
+    expect(env.PUBLIC_LIMITER.limit).toHaveBeenCalledWith({ key: 'local' })
+  })
+
+  it('normalizes cached catalogue requests and keeps client responses uncached', async () => {
+    const response = await worker.fetch(new Request('https://shop.test/api/products?bust=123', {
+      headers: { authorization: 'Bearer unused', cookie: 'test=1', 'cache-control': 'no-cache' },
+    }), env)
+    expect(response.status).toBe(200)
+    const forwarded = cachedFetch.mock.calls[0][0] as Request
+    expect(new URL(forwarded.url).search).toBe('')
+    expect([...forwarded.headers]).toEqual([])
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const innerResponse = await new PublicCatalog(ctx, env).fetch(forwarded)
+    expect(innerResponse.headers.get('cache-control')).toBe('public, max-age=300')
+    expect(innerResponse.headers.get('cache-tag')).toBe('public-catalogue')
+    expect(env.PUBLIC_LIMITER.limit).toHaveBeenCalledOnce()
+  })
+
+  it('reports cache purge failures without misrepresenting a committed product change', async () => {
+    await login()
+    purge.mockRejectedValue(new Error('Cache unavailable'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const body = new FormData()
+      body.set('product', JSON.stringify(productInput))
+      const response = await worker.fetch(adminRequest('/api/admin/products', 'POST', body), env)
+      expect(response.status).toBe(201)
+      expect(await response.json()).toEqual(expect.objectContaining({ warning: expect.stringContaining('5 minute') }))
+      expect(records).toHaveLength(1)
+      expect(log).toHaveBeenCalled()
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('purges only the cached entrypoint and surfaces unsuccessful purge results', async () => {
+    await new PublicCatalog(ctx, env).purge()
+    expect(ctx.cache?.purge).toHaveBeenCalledWith({ tags: ['public-catalogue'] })
+    vi.mocked(ctx.cache!.purge).mockResolvedValue({ success: false, errors: [] })
+    await expect(new PublicCatalog(ctx, env).purge()).rejects.toThrow('not successful')
+  })
+
+  it('does not cache catalogue errors and retries the database on a later request', async () => {
+    const prepare = vi.spyOn(env.DB, 'prepare').mockImplementationOnce(() => { throw new Error('D1 unavailable') })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await worker.fetch(new Request('https://shop.test/api/products'), env)
+      expect(response.status).toBe(500)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(log).toHaveBeenCalled()
+      expect((await worker.fetch(new Request('https://shop.test/api/products'), env)).status).toBe(200)
+      expect(prepare).toHaveBeenCalledTimes(2)
+    } finally {
+      prepare.mockRestore()
+      log.mockRestore()
+    }
+  })
+
+  it('fails closed with an explicit server error if a rate limiter is unavailable', async () => {
+    vi.mocked(env.PUBLIC_LIMITER.limit).mockRejectedValue(new Error('Rate limiter unavailable'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect((await worker.fetch(new Request('https://shop.test/api/products'), env)).status).toBe(500)
+      expect(cachedFetch).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalled()
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   it('returns only published products publicly and rejects unauthenticated admin access', async () => {
     const publicResponse = await worker.fetch(new Request('https://shop.test/api/products'), env)
     expect(publicResponse.status).toBe(200)
@@ -155,7 +297,7 @@ describe('product Worker API', () => {
     expect(crossOriginResponse.status).toBe(403)
 
     await login()
-    adminCookie = `${adminCookie?.slice(0, -1)}x`
+    adminCookie = `${adminCookie}tampered`
     const tamperedResponse = await worker.fetch(adminRequest('/api/admin/products'), env)
     expect(tamperedResponse.status).toBe(401)
   })
@@ -169,22 +311,31 @@ describe('product Worker API', () => {
     const { product: created } = await createdResponse.json() as { product: { id: string; slug: string; published: boolean } }
     expect(created.slug).toBe('iepuras')
     expect(created.published).toBe(false)
+    expect(purge).toHaveBeenCalledTimes(1)
 
     const publicResponse = await worker.fetch(new Request('https://shop.test/api/products'), env)
     expect((await publicResponse.json() as { products: unknown[] }).products).toHaveLength(0)
     const adminResponse = await worker.fetch(adminRequest('/api/admin/products'), env)
     expect((await adminResponse.json() as { products: unknown[] }).products).toHaveLength(1)
+    expect(adminResponse.headers.get('cache-control')).toBe('no-store')
+    expect(cachedFetch).toHaveBeenCalledTimes(1)
 
     const updateBody = new FormData()
-    updateBody.set('product', JSON.stringify({ ...productInput, priceMinRon: 90, priceMaxRon: 210 }))
+    updateBody.set('product', JSON.stringify({
+      ...productInput, priceMinRon: 90, priceMaxRon: 210, published: true, imageUrl: '/images/test-product.jpg',
+    }))
     const updatedResponse = await worker.fetch(adminRequest(`/api/admin/products/${created.id}`, 'PUT', updateBody), env)
     expect(updatedResponse.status).toBe(200)
     expect((await updatedResponse.json() as { product: { priceMinRon: number; priceMaxRon: number } }).product)
       .toMatchObject({ priceMinRon: 90, priceMaxRon: 210 })
+    expect(purge).toHaveBeenCalledTimes(2)
+    const publishedResponse = await worker.fetch(new Request('https://shop.test/api/products'), env)
+    expect((await publishedResponse.json() as { products: unknown[] }).products).toHaveLength(1)
 
     const deletedResponse = await worker.fetch(adminRequest(`/api/admin/products/${created.id}`, 'DELETE'), env)
     expect(deletedResponse.status).toBe(200)
     expect((await deletedResponse.json() as { deleted: boolean }).deleted).toBe(true)
+    expect(purge).toHaveBeenCalledTimes(3)
   })
 
   it('saves a complete product order and rejects incomplete orders', async () => {
@@ -208,6 +359,7 @@ describe('product Worker API', () => {
       env,
     )
     expect(reorderedResponse.status).toBe(200)
+    expect(purge).toHaveBeenCalledTimes(3)
     expect((await reorderedResponse.json() as { products: { id: string; sortOrder: number }[] }).products)
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ id: second.id, sortOrder: 1 }),
@@ -224,6 +376,7 @@ describe('product Worker API', () => {
       env,
     )
     expect(invalidResponse.status).toBe(400)
+    expect(purge).toHaveBeenCalledTimes(3)
   })
 
   it('rejects cross-origin changes and invalid product payloads', async () => {
@@ -240,5 +393,6 @@ describe('product Worker API', () => {
     invalidBody.set('product', JSON.stringify({ ...productInput, priceMaxRon: 1 }))
     const invalidResponse = await worker.fetch(adminRequest('/api/admin/products', 'POST', invalidBody), env)
     expect(invalidResponse.status).toBe(400)
+    expect(purge).not.toHaveBeenCalled()
   })
 })

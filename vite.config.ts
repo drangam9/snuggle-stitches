@@ -16,6 +16,9 @@ export default defineConfig({
     },
   },
   test: {
+    alias: {
+      'cloudflare:workers': fileURLToPath(new URL('./src/test/cloudflare-workers.ts', import.meta.url)),
+    },
     include: ['src/**/*.test.{ts,tsx}'],
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',

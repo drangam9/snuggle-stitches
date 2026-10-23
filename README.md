@@ -38,6 +38,28 @@ npm run build
 npm run preview
 ```
 
+## API abuse protection and catalogue caching
+
+The Worker applies separate per-IP budgets before authentication, database reads, image reads, or cached catalogue access:
+
+| Traffic | Limit |
+| --- | --- |
+| Login (`POST /api/admin/session`, successful or unsuccessful) | 5 requests/minute |
+| Other admin API requests, including unauthenticated requests | 60 requests/minute |
+| Public API requests, including `/api/images/*` and unknown API paths | 240 requests/minute |
+
+An exceeded budget returns HTTP `429`, a Romanian error message and `Retry-After: 60`. Static assets are not counted. Client addresses come only from Cloudflare's `CF-Connecting-IP`, not `X-Forwarded-For`; missing addresses are rejected in deployed environments. Local development can share a `local` bucket when no address is supplied.
+
+These Cloudflare Rate Limiting bindings are approximate, eventually consistent, and per Cloudflare location, not a global lockout or spending cap. People sharing an IP share a budget. Staging has separate namespaces from production; reserve the configured namespace IDs for this site's limiters within the account. Keep Cloudflare WAF/bot protections enabled: these application checks run after a Worker invocation has already begun.
+
+Public catalogue responses use **Workers Caching for five minutes**, in a dedicated `PublicCatalog` entrypoint. The outer gateway is explicitly uncached, so rate limiting and admin authentication always run. Cache hits avoid D1 reads; misses query only published products. Forwarded catalogue requests have no client cookies, authorization, query strings or cache-bypass headers, so Cloudflare Access on staging does not prevent sharing this public-data cache after access checks.
+
+Successful product creation, editing, deletion and reordering purge the inner entrypoint's catalogue cache. A purge failure is logged and returned as a warning without pretending the committed database write failed; stale catalogue data may remain until the five-minute TTL expires. Admin/session responses and errors are never cached. The outer response disables browser caching so a browser does not retain an independently stale catalogue. Image responses retain their existing one-day browser cache; this change does not add a shared R2 response cache.
+
+Deploy to staging first. After signing in through Access, check repeated catalogue requests in Workers observability: only cache misses should execute the inner D1 read. Verify a published edit appears on a fresh catalogue request and a sixth login attempt within a minute returns `429`. Local unit tests cover routing, budgets, normalization and purge behavior. With the installed local runtime, the inner fetch ran but did not retain catalogue responses, so local checks do not establish cache hits or TTL expiry; Cloudflare's distributed cache, purge and limiter propagation must also be checked in staging. Local saves may report a cache-purge warning if `ctx.cache` is unavailable.
+
+Platform references: [rate limiting bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/), [per-entrypoint caching](https://developers.cloudflare.com/workers/cache/configuration/#per-entrypoint-caching), and [cache purging](https://developers.cloudflare.com/workers/cache/purge/).
+
 ## Checks
 
 ```sh

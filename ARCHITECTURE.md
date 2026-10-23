@@ -10,6 +10,7 @@ flowchart LR
 
     subgraph cloudflare["Cloudflare"]
         worker["Cloudflare Worker<br/>API + rutare"]
+        cache["PublicCatalog<br/>Workers Caching · 5 minute"]
         assets["Static assets<br/>React / Vite din dist/"]
         d1[("D1<br/>tabelul products")]
         r2[("R2<br/>imagini încărcate")]
@@ -19,8 +20,10 @@ flowchart LR
     worker --> assets
     assets -->|"HTML, CSS, JS"| visitor
     visitor -->|"GET /api/products"| worker
-    worker -->|"produse publicate"| d1
-    d1 --> worker
+    worker -->|"după limita per IP"| cache
+    cache -->|"cache miss: produse publicate"| d1
+    d1 --> cache
+    cache --> worker
     worker -->|"JSON cu produse + URL-uri imagine"| visitor
 
     visitor -->|"GET /api/images/{cheie}"| worker
@@ -49,17 +52,18 @@ flowchart LR
 
 1. Browserul cere site-ul de la Worker. Worker-ul trimite fișierele statice construite de Vite (`dist/`) prin binding-ul `ASSETS`.
 2. Aplicația React cere `GET /api/products`.
-3. Worker-ul citește din D1 numai rândurile cu `is_published = 1`, le ordonează și le trimite ca JSON.
+3. Worker-ul verifică limita de 240 cereri API publice/minut/IP, apoi apelează entrypoint-ul intern `PublicCatalog`, cu cache de 5 minute. Numai la cache miss citește din D1 rândurile cu `is_published = 1`, le ordonează și le trimite ca JSON. Gateway-ul și răspunsul către browser nu sunt cache-uite.
 4. React afișează produsele și construiește filtrele din categoriile produselor primite.
 5. Pentru o imagine încărcată în R2, browserul cere URL-ul `/api/images/{cheie}`. Worker-ul citește obiectul din R2 și transmite conținutul imaginii. Produsele pot folosi și un URL HTTPS extern sau o imagine locală din `/images/`, caz în care imaginea nu trece prin R2.
 
 ### Proprietarul și administrarea
 
 1. Proprietarul deschide `/admin.html` și introduce parola comună a administratorului.
-2. Interfața trimite parola prin `POST /api/admin/session`. Worker-ul o compară cu secretul `ADMIN_PASSWORD` și returnează un cookie de sesiune semnat, `HttpOnly`, `SameSite=Strict` și `Secure` în producție. Cookie-ul expiră după 12 ore.
+2. Interfața trimite parola prin `POST /api/admin/session`, limitat la 5 cereri/minut/IP. Worker-ul o compară cu secretul `ADMIN_PASSWORD` și returnează un cookie de sesiune semnat, `HttpOnly`, `SameSite=Strict` și `Secure` în producție. Cookie-ul expiră după 24 de ore.
 3. Cererile către API-ul admin includ automat cookie-ul. Worker-ul îi verifică semnătura și expirarea înainte să permită accesul la produse.
 4. Interfața trimite `GET` pentru listă, `POST` pentru creare, `PUT` pentru editare și `DELETE` pentru ștergere. Worker-ul validează datele și imaginea încărcată; pentru upload nou, scrie imaginea în R2 și apoi datele produsului în D1.
-5. La editarea sau ștergerea unui produs, Worker-ul elimină vechea imagine din R2 când este cazul. După salvare, interfața admin reîncarcă lista; dacă produsul este publicat, următoarea cerere publică îl va include.
+5. La editarea sau ștergerea unui produs, Worker-ul elimină vechea imagine din R2 când este cazul. După orice modificare, inclusiv reordonare, cere ștergerea cache-ului public din entrypoint-ul intern. Dacă ștergerea cache-ului eșuează, returnează un avertisment; datele vechi pot rămâne până la 5 minute. Lista admin este mereu citită din D1, fără cache.
+6. Celelalte cereri admin au o limită separată de 60 cereri/minut/IP, verificată înainte de autentificare. Depășirea oricărei limite API produce `429` și `Retry-After: 60`. Limitele Cloudflare sunt aproximative și per locație, nu un plafon global de trafic sau cost.
 
 ### Ce se stochează unde
 

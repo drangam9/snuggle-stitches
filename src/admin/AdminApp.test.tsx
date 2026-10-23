@@ -87,7 +87,8 @@ describe('product admin', () => {
     expect(screen.getByLabelText('Preț minim (RON)')).toHaveValue(75)
   })
 
-  it('persists collection order when moving a card with the keyboard controls', async () => {
+  it.each([undefined, 'Modificarea a fost salvată, dar colecția publică poate afișa datele vechi până la 5 minute.'])(
+    'persists collection order and displays server warnings (%s)', async (warning) => {
     const reordered = [...catalogFixture].map((product, index) => ({
       ...product,
       sortOrder: index + 1,
@@ -99,7 +100,7 @@ describe('product admin', () => {
           const product = reordered.find((item) => item.id === id)
           return { ...product!, sortOrder: productIds.indexOf(id) + 1 }
         })
-        return new Response(JSON.stringify({ products }), { status: 200 })
+        return new Response(JSON.stringify({ products, warning }), { status: 200 })
       }
       return new Response(JSON.stringify({ products: catalogFixture }), { status: 200 })
     })
@@ -114,6 +115,24 @@ describe('product admin', () => {
     expect(JSON.parse(String(orderRequest?.[1]?.body))).toEqual({
       productIds: [catalogFixture[1].id, catalogFixture[0].id, ...catalogFixture.slice(2).map((product) => product.id)],
     })
+    expect(await screen.findByRole('status')).toHaveTextContent(warning ?? 'Ordinea colecției a fost salvată.')
+  })
+
+  it('shows login rate-limit errors without authenticating or retrying automatically', async () => {
+    const message = 'Prea multe cereri. Așteaptă un minut și încearcă din nou.'
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? new Response(JSON.stringify({ error: message }), { status: 429, headers: { 'retry-after': '60' } })
+        : new Response(JSON.stringify({ error: 'Autentificare necesară.' }), { status: 401 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<AdminApp />)
+    await user.type(await screen.findByLabelText('Parolă admin'), 'admin-secret')
+    await user.click(screen.getByRole('button', { name: 'Autentificare' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    expect(screen.getByLabelText('Parolă admin')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
   })
 
   it('prompts for the shared password and loads products after login', async () => {

@@ -254,7 +254,7 @@ function AdminApp() {
       })
       if (!payload.products) throw new Error('Ordinea produselor nu a fost confirmată de server.')
       setProducts(payload.products)
-      setStatus((current) => ({ ...current, error: false, message: 'Ordinea colecției a fost salvată.' }))
+      setStatus((current) => ({ ...current, error: false, message: payload.warning ?? 'Ordinea colecției a fost salvată.' }))
     } catch (error) {
       if (error instanceof AdminAuthenticationError) {
         setNeedsLogin(true)

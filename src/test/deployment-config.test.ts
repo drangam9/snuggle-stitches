@@ -12,6 +12,8 @@ interface WorkerConfig {
   vars: { ENVIRONMENT: string }
   d1_databases: { binding: string; database_name: string; database_id: string; migrations_dir: string }[]
   r2_buckets: { binding: string; bucket_name: string }[]
+  ratelimits: { name: string; namespace_id: string; simple: { limit: number; period: number } }[]
+  exports: Record<string, { type: string; cache: { enabled: boolean } }>
 }
 
 const parsed = parseConfigFileTextToJson('wrangler.jsonc', wranglerSource)
@@ -20,6 +22,23 @@ const config = parsed.config as WorkerConfig & { env: { staging: WorkerConfig; p
 const { scripts } = JSON.parse(packageSource) as { scripts: Record<string, string> }
 
 describe('deployment environment isolation', () => {
+  it('enforces the agreed budgets with isolated staging counters and an uncached gateway', () => {
+    const limits = [
+      { name: 'LOGIN_LIMITER', simple: { limit: 5, period: 60 } },
+      { name: 'ADMIN_LIMITER', simple: { limit: 60, period: 60 } },
+      { name: 'PUBLIC_LIMITER', simple: { limit: 240, period: 60 } },
+    ]
+    for (const environment of [config, ...Object.values(config.env)]) {
+      expect(environment.ratelimits.map(({ name, simple }) => ({ name, simple }))).toEqual(limits)
+      expect(new Set(environment.ratelimits.map(({ namespace_id }) => namespace_id)).size).toBe(3)
+      expect(environment.exports.default.cache.enabled).toBe(false)
+      expect(environment.exports.PublicCatalog.cache.enabled).toBe(true)
+    }
+    expect(config.ratelimits).toEqual(config.env.production.ratelimits)
+    const productionIds = config.env.production.ratelimits.map(({ namespace_id }) => namespace_id)
+    expect(config.env.staging.ratelimits.every(({ namespace_id }) => !productionIds.includes(namespace_id))).toBe(true)
+  })
+
   it('uses separate staging and production Workers, databases, and buckets', () => {
     const { staging, production } = config.env
     expect(staging.name).not.toBe(production.name)

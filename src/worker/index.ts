@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from 'cloudflare:workers'
 import type { Env } from './env'
 import { parseProductInput, serializeProduct, slugify, type ProductInput, type ProductRecord, type ProductRow } from './products'
 
@@ -25,11 +26,19 @@ class HttpError extends Error {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
     try {
+      if (url.pathname.startsWith('/api/')) {
+        const limited = await checkRateLimit(request, env, url)
+        if (limited) return limited
+      }
       if (url.pathname === '/api/products' && request.method === 'GET') {
-        return json({ products: await getProducts(env, true) })
+        // Normalize the request so cookies, query strings and client cache directives cannot bypass the shared cache.
+        const response = await ctx.exports.PublicCatalog.fetch(new Request(new URL('/api/products', url)))
+        const outgoing = new Response(response.body, response)
+        outgoing.headers.set('cache-control', 'no-store')
+        return outgoing
       }
 
       if (url.pathname.startsWith('/api/images/') && request.method === 'GET') {
@@ -56,7 +65,20 @@ export default {
         if (request.method !== 'GET' && !isSameOrigin(request, url, env)) {
           throw new HttpError(403, 'Product changes must come from this website.')
         }
-        return await handleAdminProducts(request, env, url)
+        const response = await handleAdminProducts(request, env, url)
+        if (response.ok && request.method !== 'GET') {
+          try {
+            await ctx.exports.PublicCatalog.purge()
+          } catch (error) {
+            console.error('Public catalogue cache purge failed after product change.', error)
+            const payload = await response.json() as { warning?: string }
+            return json({
+              ...payload,
+              warning: [payload.warning, 'Modificarea a fost salvată, dar colecția publică poate afișa datele vechi până la 5 minute.'].filter(Boolean).join(' '),
+            }, response.status)
+          }
+        }
+        return response
       }
 
       if (url.pathname.startsWith('/api/')) {
@@ -70,6 +92,48 @@ export default {
       return json({ error: 'The request could not be completed. Please try again.' }, 500)
     }
   },
+}
+
+async function checkRateLimit(request: Request, env: Env, url: URL): Promise<Response | null> {
+  const ip = request.headers.get('cf-connecting-ip')
+  if (!ip && env.ENVIRONMENT !== 'local') throw new HttpError(400, 'Client address is missing.')
+  const key = ip ?? 'local'
+  const limiter = url.pathname === '/api/admin/session' && request.method === 'POST'
+    ? env.LOGIN_LIMITER
+    : url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/')
+      ? env.ADMIN_LIMITER
+      : env.PUBLIC_LIMITER
+  const { success } = await limiter.limit({ key })
+  if (success) return null
+  const response = json({ error: 'Prea multe cereri. Așteaptă un minut și încearcă din nou.' }, 429)
+  response.headers.set('retry-after', '60')
+  return response
+}
+
+export class PublicCatalog extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method !== 'GET' || new URL(request.url).pathname !== '/api/products') {
+      return json({ error: 'This API endpoint was not found.' }, 404)
+    }
+    try {
+      return Response.json({ products: await getProducts(this.env, true) }, {
+        headers: {
+          'cache-control': 'public, max-age=300',
+          'cache-tag': 'public-catalogue',
+          'x-content-type-options': 'nosniff',
+        },
+      })
+    } catch (error) {
+      console.error('Public catalogue database read failed.', error)
+      return json({ error: 'The request could not be completed. Please try again.' }, 500)
+    }
+  }
+
+  async purge(): Promise<void> {
+    if (!this.ctx.cache) throw new Error('Workers Caching is not available.')
+    const result = await this.ctx.cache.purge({ tags: ['public-catalogue'] })
+    if (!result.success) throw new Error('Public catalogue cache purge was not successful.')
+  }
 }
 
 async function getProducts(env: Env, publishedOnly: boolean): Promise<ProductRow[]> {
