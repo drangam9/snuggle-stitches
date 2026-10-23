@@ -73,6 +73,50 @@ describe('product admin', () => {
     expect(JSON.parse(body.get('product') as string).category).toBe('Cadouri personalizate')
   })
 
+  it('saves a fixed price and an ordered gallery after adding, moving and removing photos', async () => {
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:new-photo')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Response(JSON.stringify(init?.method === 'PUT' ? { product: catalogFixture[0] } : { products: catalogFixture })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<AdminApp />)
+    await user.click(await screen.findByRole('button', { name: 'Editează Bonnie, iepurașul' }))
+    await user.selectOptions(screen.getByLabelText('Tip preț'), 'fixed')
+    expect(screen.queryByLabelText('Preț maxim (RON)')).not.toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Preț (RON)'))
+    await user.type(screen.getByLabelText('Preț (RON)'), '120')
+    await user.upload(screen.getByLabelText('Imagine produs'), new File(['new'], 'new.png', { type: 'image/png' }))
+    await user.click(screen.getByRole('button', { name: 'Mută fotografia 2 mai sus' }))
+    await user.click(screen.getByRole('button', { name: 'Șterge fotografia 2' }))
+    await user.click(screen.getByRole('button', { name: 'Salvează modificările' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Model salvat.')
+    const body = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')?.[1]?.body as FormData
+    expect(JSON.parse(String(body.get('product')))).toMatchObject({ priceMinRon: 120, priceMaxRon: 120 })
+    expect(JSON.parse(String(body.get('gallery')))).toEqual(['upload:0'])
+    expect(body.getAll('images')).toHaveLength(1)
+    expect(revokeUrl).toHaveBeenCalledWith('blob:new-photo')
+    createUrl.mockRestore()
+    revokeUrl.mockRestore()
+  })
+
+  it('rejects a sixth image without discarding the existing gallery', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      products: [{ ...catalogFixture[0], images: ['/images/1.jpg', '/images/2.jpg', '/images/3.jpg', '/images/4.jpg'] }],
+    }))))
+    const user = userEvent.setup()
+    render(<AdminApp />)
+    await user.click(await screen.findByRole('button', { name: 'Editează Bonnie, iepurașul' }))
+    await user.upload(screen.getByLabelText('Imagine produs'), [
+      new File(['a'], 'a.png', { type: 'image/png' }),
+      new File(['b'], 'b.png', { type: 'image/png' }),
+    ])
+    expect(await screen.findByRole('alert')).toHaveTextContent('maximum 5 fotografii')
+    expect(screen.getByRole('button', { name: 'Șterge fotografia 4' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Șterge fotografia 5' })).not.toBeInTheDocument()
+  })
+
   it('opens the collection item editor from its tag and focuses the tag field', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ products: catalogFixture }), { status: 200 })))
     const user = userEvent.setup()

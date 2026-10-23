@@ -4,6 +4,24 @@ A Romanian-only crochet-plushie showcase and product catalogue, built with React
 
 For a diagram of the frontend-to-Worker-to-database flow, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Personal creations preview
+
+The 23 October photo batch contains 12 distinct personal creations: three rabbits, three dogs, two cats, a frog, a pink pony, an axolotl and a floral arrangement. They were added to the separate staging database with Romanian names, descriptions, labels, categories and alternative text. Their **75-200 RON prices are provisional, approved for staging only**; do not copy them into production without reviewing the prices and content.
+
+Optimized, metadata-free JPEGs are in [public/images/creatii](./public/images/creatii/). The welcome section uses a dedicated crop of the white rabbit in green overalls, retaining the decorative grass. Original source photos remain unchanged in `public/snuggle-stitches-items-2/`, which is excluded from Cloudflare asset uploads by [public/.assetsignore](./public/.assetsignore). The catalogue photos use static `/images/creatii/` URLs; subsequent admin uploads still use R2.
+
+The content import was performed explicitly against staging, not added to automatic database migrations. Production's existing collection was not changed. The staging content remains editable through its admin page; promotion requires separate approval and a reviewed content import, in addition to deploying the frontend.
+
+## Product pricing and photo galleries
+
+- In the admin item editor, choose **Preț fix** (one amount) or **Interval de preț** (minimum and maximum). A fixed price is stored with equal minimum and maximum values and shown as `120 RON`, without range-specific explanatory text. Existing prices remain unchanged.
+- Add up to **5 photos per model**, each JPG, PNG or WebP, at most **5 MB per file**. Select several files at once. Drag the photo handles or use the up/down buttons to reorder; the first photo is the cover. Removing a photo only takes effect after saving.
+- On collection photos, hovering cycles the gallery every 1.8 seconds and leaving restores the cover. Automatic cycling is disabled for reduced-motion preferences. Single-photo models remain static.
+- The product dialog has previous/next buttons, thumbnails, a position counter, keyboard arrow navigation and touch swiping. It does not auto-advance.
+- Galleries are persisted in D1 as an ordered `images_json` array; uploaded photo files live in R2. Removed photos are deleted after a successful save, and deleting a model removes all its uploaded photos. Failed uploads/database writes trigger cleanup of newly uploaded files; cleanup failures are logged. Existing single-photo records use their original image until the next save.
+
+Apply [migration 0004](./migrations/0004_product_gallery.sql) **before deploying the updated Worker**. The GitHub staging/production workflow already applies migrations before each deployment. For local development, run `npm run db:migrate:local` again. No remote data migration or deployment is performed by editing the code.
+
 ## Run locally
 
 Requires Node.js 22.12+ (or a newer supported release) and npm. Local development uses Wrangler, a local D1 database, and the local Worker.

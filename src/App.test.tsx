@@ -63,14 +63,14 @@ describe('Snuggle Stitches showcase', () => {
     expect(screen.getByRole('button', { name: 'Tema piersică' })).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('shows hero and story photo placeholders without global photo credits', async () => {
+  it('shows the owner’s cropped bunny photo in the hero and keeps the story placeholder', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Descoperă Bonnie, iepurașul' })
 
-    expect(screen.getByRole('img', { name: 'Loc rezervat pentru fotografia creațiilor Snuggle Stitches.' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Iepuraș alb croșetat, în salopetă verde/ })).toHaveAttribute('src', '/images/creatii/iepuras-gradinar-hero.jpg')
     expect(screen.getByRole('img', { name: 'Loc rezervat pentru o fotografie din atelierul Snuggle Stitches.' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Credite foto' })).not.toBeInTheDocument()
-    expect(document.querySelector('.hero-photo img')).not.toBeInTheDocument()
+    expect(document.querySelector('.hero-photo img')).toHaveAttribute('fetchpriority', 'high')
     expect(document.querySelector('.story-image-wrap > img')).not.toBeInTheDocument()
   })
 

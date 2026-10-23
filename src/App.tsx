@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { Dialog } from './components/Dialog'
+import { ProductGallery } from './components/ProductGallery'
 import { Doodle, Icon } from './components/Graphics'
 import { translations } from './i18n'
-import type { ProductRow } from './worker/products'
+import { productImages, type ProductRow } from './worker/products'
 import './App.css'
 
 type CatalogProduct = ProductRow & { tone: string }
@@ -222,11 +223,15 @@ function App() {
           <div className="hero-visual">
             <Doodle kind="spark" className="hero-spark" />
             <div className="hero-photo">
-              <div className="photo-grid" />
+              <img
+                className="hero-featured-image"
+                src="/images/creatii/iepuras-gradinar-hero.jpg"
+                alt="Iepuraș alb croșetat, în salopetă verde și cu gentuță maro, așezat pe iarbă decorativă verde"
+                width="630"
+                height="680"
+                fetchPriority="high"
+              />
               <span className="hero-photo-label">{copy.hero.imageLabel}</span>
-              <div className="hero-image-placeholder" role="img" aria-label={copy.hero.imagePlaceholder}>
-                <span>{copy.hero.imagePlaceholder}</span>
-              </div>
               <Doodle kind="flower" className="photo-flower" />
               <div className="gift-decoration" aria-hidden="true"><Icon name="gift" size={58} /><span>{copy.hero.giftLabel}</span></div>
             </div>
@@ -288,7 +293,7 @@ function App() {
                   <button className="design-open" aria-label={`${copy.collection.designAction} ${design.name}`} onClick={() => setModal({ view: 'design', design })}>
                     <div className="design-image">
                       <span className="design-tag">{design.tag}</span>
-                      <img src={design.imageUrl} alt={design.alt} width="600" height="600" loading="lazy" />
+                      <ProductGallery images={productImages(design)} alt={design.alt} />
                       <span className="design-image-action">{copy.collection.closerLook} <Icon name="plus" size={16} /></span>
                     </div>
                     <div className="design-info">
@@ -427,12 +432,14 @@ function App() {
         <Dialog title={modalTitle} closeLabel={copy.closeDialog} onDismiss={() => setModal(null)} className={modal.view === 'design' ? 'product-dialog' : ''}>
           {modal.view === 'design' && selectedDesign ? (
             <div className="product-detail">
-              <div className={`detail-image ${selectedDesign.tone}`}><img src={selectedDesign.imageUrl} alt={selectedDesign.alt} /></div>
+              <div className={`detail-image ${selectedDesign.tone}`}>
+                <ProductGallery key={selectedDesign.id} images={productImages(selectedDesign)} alt={selectedDesign.alt} carousel />
+              </div>
               <div className="detail-copy">
                 <p className="eyebrow">{selectedDesign.category} / {selectedDesign.tag}</p>
                 <h2 id="dialog-title" tabIndex={-1}>{selectedDesign.name}</h2>
                 <p>{selectedDesign.description}</p>
-                <div className="detail-pricing"><strong>{formatPriceRange(selectedDesign.priceMinRon, selectedDesign.priceMaxRon)}</strong><span>{copy.details.priceDepending}</span></div>
+                <div className="detail-pricing"><strong>{formatPriceRange(selectedDesign.priceMinRon, selectedDesign.priceMaxRon)}</strong>{selectedDesign.priceMinRon !== selectedDesign.priceMaxRon && <span>{copy.details.priceDepending}</span>}</div>
                 <h3>{copy.details.title}</h3>
                 <ul className="detail-touches">{copy.personalize.touches.map((touch) => <li key={touch}><Icon name="check" size={14} />{touch}</li>)}</ul>
                 <button className="button" onClick={() => openContact(modal.design)}>{copy.details.contactAction} <Icon name="arrow" size={18} /></button>

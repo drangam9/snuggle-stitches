@@ -36,8 +36,8 @@
 .hero-photo { position: relative; isolation: isolate; aspect-ratio: .96; border: 1px solid #9e8e8d; border-radius: 46% 46% 8px 8px; background: #f0dcd5; overflow: hidden; transform: rotate(3deg); box-shadow: 9px 9px 0 #eae2d9; }
 .photo-grid { position: absolute; inset: 0; z-index: -1; opacity: .23; background-image: linear-gradient(#b0a292 1px, transparent 1px), linear-gradient(90deg, #b0a292 1px, transparent 1px); background-size: 31px 31px; mask-image: linear-gradient(transparent 55%, black); }
 .hero-photo::after { content: ''; position: absolute; top: 79%; left: 0; width: 100%; height: 1px; background: #baaaa1; z-index: -1; }
-.hero-image-placeholder { position: absolute; inset: 20% 16% 24%; display: grid; place-items: center; padding: 16px; border: 1px dashed #a99694; border-radius: 42% 42% 7px 7px; background: #f8ece6; color: #816b75; font-family: 'Fraunces', Georgia, serif; font-size: 12px; font-style: italic; line-height: 1.6; text-align: center; transform: rotate(-6deg); }
-.hero-photo-label { position: absolute; left: 0; right: 0; top: 8%; text-align: center; font-size: 10px; font-family: 'Fraunces', Georgia, serif; font-style: italic; letter-spacing: .02em; color: #816b75; transform: rotate(-3deg); }
+.hero-featured-image { display: block; width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; object-position: center; }
+.hero-photo-label { position: absolute; left: 50%; top: 4%; width: max-content; max-width: 80%; padding: 6px 12px; border-radius: 20px; background: #fbf8f1e8; text-align: center; font-size: 10px; font-family: 'Fraunces', Georgia, serif; font-style: italic; letter-spacing: .02em; color: #56434d; transform: translateX(-50%) rotate(-3deg); }
 .hero-spark { --doodle-rotation: 15deg; position: absolute; color: #c0b0d5; width: 54px; height: 54px; z-index: 1; left: -14px; top: 18px; transform: rotate(15deg); animation: gentle-float 6s ease-in-out infinite; animation-delay: -1.5s; }
 .photo-flower { --doodle-rotation: 12deg; width: 59px; height: 59px; position: absolute; bottom: 50px; left: 24px; color: #a3ac95; transform: rotate(12deg); animation: gentle-float 7.5s ease-in-out infinite; animation-delay: -2s; }
 .gift-decoration { --doodle-rotation: 8deg; position: absolute; right: 12px; bottom: 12%; transform: rotate(8deg); color: #89717c; display: flex; flex-direction: column; align-items: center; gap: 4px; animation: gentle-float 6.8s ease-in-out infinite; animation-delay: -3s; }
@@ -202,6 +202,19 @@
 .detail-image { min-height: 100%; }
 .detail-image > img { width: 100%; height: 100%; min-height: 530px; object-fit: cover; filter: saturate(.65); }
 .detail-image > img.contain-image { object-fit: contain; mix-blend-mode: multiply; padding: 20px; }
+.product-gallery { position: relative; width: 100%; height: 100%; min-width: 0; }
+.product-gallery > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.design-image > .product-gallery { position: absolute; inset: 0; }
+.design-image > .product-gallery > img { filter: saturate(.58) contrast(.93); }
+.detail-image .product-gallery { display: flex; flex-direction: column; background: var(--card-bg); touch-action: pan-y; }
+.detail-image .product-gallery > img { flex: 1; min-height: 0; height: 420px; object-fit: contain; }
+.gallery-navigation { display: flex; align-items: center; justify-content: center; gap: 18px; padding: 8px; }
+.gallery-navigation button { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 50%; background: var(--cream); color: var(--ink); font-size: 26px; }
+.gallery-navigation span { font-size: 12px; font-variant-numeric: tabular-nums; }
+.gallery-thumbnails { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 0 10px 12px; }
+.gallery-thumbnails button { width: 44px; height: 44px; border: 2px solid transparent; border-radius: 6px; overflow: hidden; padding: 0; background: var(--cream); }
+.gallery-thumbnails button[aria-pressed="true"] { border-color: var(--ink); }
+.gallery-thumbnails img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .detail-copy { padding: 45px 32px 25px; }
 .detail-copy .eyebrow { font-size: 8px; margin-bottom: 12px; }
 .detail-copy > p:not(.eyebrow, .small-note, .photo-credit) { font-size: 12px; margin-top: 17px; color: var(--muted); line-height: 1.8; }
@@ -412,7 +425,8 @@
   .footer > div { font-size: 8px; margin-top: 3px; }
   .dialog, .dialog.product-dialog { width: calc(100% - 24px); max-height: calc(100dvh - 24px); border-radius: 12px; }
   .product-detail { grid-template-columns: 1fr; min-height: 0; }
-  .detail-image { height: 240px; min-height: 0; }
+  .detail-image { min-height: 0; }
+  .detail-image .product-gallery > img { height: 240px; flex: none; }
   .detail-image > img { min-height: 0; height: 240px; object-position: center 35%; }
   .detail-copy { padding: 26px 24px; }
   .dialog h2 { font-size: 31px; }

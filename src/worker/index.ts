@@ -1,11 +1,11 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import type { Env } from './env'
-import { parseProductInput, serializeProduct, slugify, type ProductInput, type ProductRecord, type ProductRow } from './products'
+import { isAllowedImageUrl, parseProductInput, serializeProduct, slugify, type ProductInput, type ProductRecord, type ProductRow } from './products'
 
 const productSelect = `SELECT id, slug, name, tag, short, description, alt,
   category, price_min_ron, price_max_ron,
   image_key, image_url, credit_author, credit_url, credit_license, is_published,
-  sort_order, created_at, updated_at FROM products`
+  sort_order, created_at, updated_at, images_json FROM products`
 const maxImageBytes = 5 * 1024 * 1024
 const allowedImageTypes = new Map([
   ['image/jpeg', 'jpg'],
@@ -165,8 +165,8 @@ async function handleAdminProducts(request: Request, env: Env, url: URL): Promis
     return json({ products: await getProducts(env, false) })
   }
   if (path === '/api/admin/products' && request.method === 'POST') {
-    const { input, image } = await readProductRequest(request)
-    return await createProduct(env, input, image)
+    const { input, images } = await readProductRequest(request)
+    return await createProduct(env, input, images)
   }
   if (path === '/api/admin/products/reorder' && request.method === 'PUT') {
     return await reorderProducts(request, env)
@@ -175,8 +175,8 @@ async function handleAdminProducts(request: Request, env: Env, url: URL): Promis
   const id = path.slice('/api/admin/products/'.length)
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) throw new HttpError(404, 'Product not found.')
   if (request.method === 'PUT') {
-    const { input, image } = await readProductRequest(request)
-    return await updateProduct(env, id, input, image)
+    const { input, images } = await readProductRequest(request)
+    return await updateProduct(env, id, input, images)
   }
   if (request.method === 'DELETE') return await deleteProduct(env, id)
   throw new HttpError(405, 'This method is not allowed for this endpoint.')
@@ -213,10 +213,10 @@ async function reorderProducts(request: Request, env: Env): Promise<Response> {
   return json({ products: await getProducts(env, false) })
 }
 
-async function readProductRequest(request: Request): Promise<{ input: ProductInput; image: File | null }> {
+async function readProductRequest(request: Request): Promise<{ input: ProductInput; images: (string | File)[] | null }> {
   const contentLength = Number(request.headers.get('content-length') ?? 0)
-  if (contentLength > maxImageBytes + 128 * 1024) {
-    throw new HttpError(413, 'Choose an image smaller than 5 MB.')
+  if (contentLength > 5 * maxImageBytes + 128 * 1024) {
+    throw new HttpError(413, 'Use at most 5 images, each smaller than 5 MB.')
   }
   let form: FormData
   try {
@@ -232,17 +232,47 @@ async function readProductRequest(request: Request): Promise<{ input: ProductInp
     throw new HttpError(400, 'Product details are missing or invalid.')
   }
 
-  let image: File | null = null
-  const file = form.get('image')
-  if (file instanceof File && file.size > 0) {
+  const files = [...form.getAll('images'), ...form.getAll('image')].filter((file): file is File => file instanceof File && file.size > 0)
+  if (files.length > 5) throw new HttpError(400, 'Use at most 5 images.')
+  for (const file of files) {
     if (file.size > maxImageBytes) throw new HttpError(413, 'Choose an image smaller than 5 MB.')
     if (!allowedImageTypes.has(file.type)) throw new HttpError(415, 'Use a JPG, PNG, or WebP image.')
     if (!(await isValidImageContent(file))) throw new HttpError(415, 'The selected file is not a valid JPG, PNG, or WebP image.')
-    image = file
   }
 
+  let images: (string | File)[] | null = files.length ? files : null
+  if (form.has('gallery')) {
+    let entries: unknown
+    try {
+      entries = JSON.parse(String(form.get('gallery')))
+    } catch {
+      throw new HttpError(400, 'Send a valid image gallery.')
+    }
+    if (!Array.isArray(entries) || entries.length > 5 || !entries.every((entry) => typeof entry === 'string')) {
+      throw new HttpError(400, 'Use at most 5 images.')
+    }
+    const used = new Set<number>()
+    images = entries.map((entry: string) => {
+      if (entry.startsWith('upload:')) {
+        const index = Number(entry.slice(7))
+        if (!Number.isInteger(index) || index < 0 || !files[index] || used.has(index)) {
+          throw new HttpError(400, 'The image upload order is invalid.')
+        }
+        used.add(index)
+        return files[index]
+      }
+      if (!entry || entry.length > 1000 || !isAllowedImageUrl(entry)) throw new HttpError(400, 'The image gallery contains an invalid URL.')
+      return entry
+    })
+    if (used.size !== files.length || new Set(entries).size !== entries.length) {
+      throw new HttpError(400, 'The image gallery contains unused or duplicate images.')
+    }
+    if (typeof data === 'object' && data !== null) {
+      data = { ...data, imageUrl: typeof images[0] === 'string' ? images[0] : '' }
+    }
+  }
   try {
-    return { input: parseProductInput(data, image !== null), image }
+    return { input: parseProductInput(data, Boolean(images?.length)), images }
   } catch (error) {
     if (error instanceof Error) throw new HttpError(400, error.message)
     throw error
@@ -258,19 +288,66 @@ async function isValidImageContent(file: File): Promise<boolean> {
     String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
 }
 
-async function createProduct(env: Env, input: ProductInput, image: File | null): Promise<Response> {
+function storedImageKeys(product: ProductRecord): string[] {
+  return serializeProduct(product).images.flatMap((url) => url.startsWith('/api/images/')
+    ? [decodeURIComponent(url.slice('/api/images/'.length))] : [])
+}
+
+async function removeImages(env: Env, keys: string[], productId: string): Promise<boolean> {
+  let success = true
+  for (const key of keys) {
+    try {
+      await env.IMAGES.delete(key)
+    } catch (error) {
+      console.error('Product image could not be removed from storage', { productId, key, error })
+      success = false
+    }
+  }
+  return success
+}
+
+async function uploadGallery(env: Env, id: string, entries: (string | File)[], current?: ProductRecord) {
+  const urls: string[] = []
+  const uploaded: string[] = []
+  const existing = current ? serializeProduct(current).images : []
+  try {
+    for (const entry of entries) {
+      if (typeof entry === 'string') {
+        if (entry.startsWith('/api/images/') && !existing.includes(entry)) {
+          throw new HttpError(400, 'Only this product\'s existing uploaded images can be retained.')
+        }
+        urls.push(entry)
+      } else {
+        const key = makeImageKey(id, entry)
+        uploaded.push(key)
+        await env.IMAGES.put(key, entry.stream(), { httpMetadata: { contentType: entry.type } })
+        urls.push(`/api/images/${encodeURIComponent(key)}`)
+      }
+    }
+    return { urls, uploaded }
+  } catch (error) {
+    await removeImages(env, uploaded, id)
+    throw error
+  }
+}
+
+function coverKey(url: string | undefined): string | null {
+  return url?.startsWith('/api/images/') ? decodeURIComponent(url.slice('/api/images/'.length)) : null
+}
+
+async function createProduct(env: Env, input: ProductInput, images: (string | File)[] | null): Promise<Response> {
   const id = crypto.randomUUID()
-  const imageKey = image ? makeImageKey(id, image) : null
-  if (image && imageKey) await env.IMAGES.put(imageKey, image.stream(), { httpMetadata: { contentType: image.type } })
+  const { urls, uploaded } = await uploadGallery(env, id, images ?? (input.imageUrl ? [input.imageUrl] : []))
+  const imageKey = coverKey(urls[0])
   try {
     await env.DB.prepare(`INSERT INTO products (
       id, slug, name, tag, short, description, alt, category, price_min_ron, price_max_ron, image_key,
-      image_url, credit_author, credit_url, credit_license, is_published, sort_order
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` )
-      .bind(...inputBindings(id, input.name, input, imageKey))
+      image_url, credit_author, credit_url, credit_license, is_published, sort_order, images_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` )
+      .bind(...inputBindings(id, input.name, { ...input, imageUrl: urls[0] ?? '' }, imageKey), JSON.stringify(urls))
       .run()
   } catch (error) {
-    if (imageKey) await env.IMAGES.delete(imageKey)
+    await removeImages(env, uploaded, id)
     if (isUniqueViolation(error)) throw new HttpError(409, 'A product with that URL-friendly name already exists.')
     throw error
   }
@@ -278,38 +355,35 @@ async function createProduct(env: Env, input: ProductInput, image: File | null):
   return json({ product }, 201)
 }
 
-async function updateProduct(env: Env, id: string, input: ProductInput, image: File | null): Promise<Response> {
+async function updateProduct(env: Env, id: string, input: ProductInput, images: (string | File)[] | null): Promise<Response> {
   const current = await findProduct(env, id)
   if (!current) throw new HttpError(404, 'Product not found.')
-  const imageKey = image ? makeImageKey(id, image) : current.image_key
-  if (image && imageKey) await env.IMAGES.put(imageKey, image.stream(), { httpMetadata: { contentType: image.type } })
+  const entries = images ?? (current.images_json != null ? serializeProduct(current).images : input.imageUrl ? [input.imageUrl] : [])
+  const { urls, uploaded } = await uploadGallery(env, id, entries, current)
+  const imageKey = coverKey(urls[0])
   try {
     await env.DB.prepare(`UPDATE products SET slug = ?, name = ?, tag = ?, short = ?,
       description = ?, alt = ?,
       category = ?, price_min_ron = ?, price_max_ron = ?, image_key = ?, image_url = ?,
-      credit_author = ?, credit_url = ?, credit_license = ?, is_published = ?, sort_order = ?,
+      credit_author = ?, credit_url = ?, credit_license = ?, is_published = ?, sort_order = ?, images_json = ?,
       updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .bind(
         slugify(input.name),
         input.name, input.tag, input.short, input.description, input.alt, input.category,
-        input.priceMinRon, input.priceMaxRon, imageKey, image ? null : input.imageUrl,
+        input.priceMinRon, input.priceMaxRon, imageKey, imageKey ? null : urls[0] ?? '',
         input.creditAuthor, input.creditUrl, input.creditLicense, Number(input.published),
-        input.sortOrder, id,
+        input.sortOrder, JSON.stringify(urls), id,
       ).run()
   } catch (error) {
-    if (image && imageKey) await env.IMAGES.delete(imageKey)
+    await removeImages(env, uploaded, id)
     if (isUniqueViolation(error)) throw new HttpError(409, 'A product with that URL-friendly name already exists.')
     throw error
   }
 
   let warning: string | undefined
-  if (image && current.image_key) {
-    try {
-      await env.IMAGES.delete(current.image_key)
-    } catch (error) {
-      console.error('Old product image could not be deleted', { productId: id, error })
-      warning = 'The product was updated, but its previous image could not be removed from storage.'
-    }
+  const retained = new Set(urls.map(coverKey).filter((key): key is string => key !== null))
+  if (!await removeImages(env, storedImageKeys(current).filter((key) => !retained.has(key)), id)) {
+    warning = 'Modelul a fost salvat, dar unele fotografii vechi nu au putut fi șterse.'
   }
   return json({ product: await getProduct(env, id), warning })
 }
@@ -319,13 +393,8 @@ async function deleteProduct(env: Env, id: string): Promise<Response> {
   if (!current) throw new HttpError(404, 'Product not found.')
   await env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run()
   let warning: string | undefined
-  if (current.image_key) {
-    try {
-      await env.IMAGES.delete(current.image_key)
-    } catch (error) {
-      console.error('Deleted product image could not be removed from storage', { productId: id, error })
-      warning = 'The product was deleted, but its image could not be removed from storage.'
-    }
+  if (!await removeImages(env, storedImageKeys(current), id)) {
+    warning = 'Modelul a fost șters, dar unele fotografii nu au putut fi eliminate din stocare.'
   }
   return json({ deleted: true, warning })
 }

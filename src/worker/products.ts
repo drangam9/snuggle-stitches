@@ -1,5 +1,9 @@
 export type ProductCategory = string
 
+export function productImages(product: { images?: string[]; imageUrl: string }): string[] {
+  return product.images ?? (product.imageUrl ? [product.imageUrl] : [])
+}
+
 export interface ProductInput {
   name: string
   tag: string
@@ -18,6 +22,7 @@ export interface ProductInput {
 }
 
 export interface ProductRow extends ProductInput {
+  images: string[]
   id: string
   slug: string
   imageKey: string | null
@@ -26,6 +31,7 @@ export interface ProductRow extends ProductInput {
 }
 
 export interface ProductRecord {
+  images_json?: string | null
   id: string
   slug: string
   name: string
@@ -131,7 +137,7 @@ export function parseProductInput(value: unknown, hasImageUpload = false): Produ
   }
 }
 
-function isAllowedImageUrl(value: string): boolean {
+export function isAllowedImageUrl(value: string): boolean {
   if (value.startsWith('/images/')) return !value.includes('..') && !value.includes('\\')
   if (value.startsWith('/api/images/')) {
     try {
@@ -149,7 +155,13 @@ function isAllowedImageUrl(value: string): boolean {
 }
 
 export function serializeProduct(row: ProductRecord): ProductRow {
+  const cover = row.image_key ? `/api/images/${encodeURIComponent(row.image_key)}` : row.image_url ?? ''
+  const images: unknown = row.images_json == null ? (cover ? [cover] : []) : JSON.parse(row.images_json)
+  if (!Array.isArray(images) || images.length > 5 || !images.every((url): url is string => typeof url === 'string' && isAllowedImageUrl(url))) {
+    throw new Error('Stored product gallery is invalid.')
+  }
   return {
+    images,
     id: row.id,
     slug: row.slug,
     name: row.name,
@@ -161,7 +173,7 @@ export function serializeProduct(row: ProductRecord): ProductRow {
     priceMinRon: row.price_min_ron,
     priceMaxRon: row.price_max_ron,
     imageKey: row.image_key,
-    imageUrl: row.image_key ? `/api/images/${encodeURIComponent(row.image_key)}` : row.image_url ?? '',
+    imageUrl: images[0] ?? '',
     creditAuthor: row.credit_author,
     creditUrl: row.credit_url,
     creditLicense: row.credit_license,

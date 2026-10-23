@@ -30,6 +30,7 @@ describe('product input validation', () => {
   })
 
   it('requires whole, non-negative RON prices with a maximum no lower than the minimum', () => {
+    expect(parseProductInput({ ...validProduct, priceMinRon: 120, priceMaxRon: 120 })).toMatchObject({ priceMinRon: 120, priceMaxRon: 120 })
     expect(() => parseProductInput({ ...validProduct, priceMinRon: -1 })).toThrow('Enter a valid minimum price in RON.')
     expect(() => parseProductInput({ ...validProduct, priceMaxRon: 74 })).toThrow('Maximum price must be at least the minimum price.')
     expect(() => parseProductInput({ ...validProduct, priceMinRon: 75.5 })).toThrow('Enter a valid minimum price in RON.')

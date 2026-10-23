@@ -63,14 +63,15 @@ beforeEach(() => {
         },
         async first<T>() {
           const id = String(values[0] ?? '')
-          return (records.find((record) => record.id === id) ?? null) as T | null
+          const record = records.find((record) => record.id === id)
+          return (record ? { ...record } : null) as T | null
         },
         async run() {
           if (query.startsWith('INSERT INTO products')) {
             const [
               id, slug, name, tag, short, description, alt, category,
               price_min_ron, price_max_ron, image_key, image_url, credit_author,
-              credit_url, credit_license, is_published, sort_order,
+              credit_url, credit_license, is_published, sort_order, images_json,
             ] = values
             records.push({
               id: String(id), slug: String(slug), name: String(name), tag: String(tag), short: String(short),
@@ -79,6 +80,7 @@ beforeEach(() => {
               image_key: image_key as string | null, image_url: image_url as string | null,
               credit_author: String(credit_author), credit_url: String(credit_url), credit_license: String(credit_license),
               is_published: Number(is_published), sort_order: Number(sort_order),
+              images_json: typeof images_json === 'string' ? images_json : null,
               created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
             })
           }
@@ -93,12 +95,12 @@ beforeEach(() => {
             const [
               slug, name, tag, short, description, alt, category,
               price_min_ron, price_max_ron, image_key, image_url, credit_author,
-              credit_url, credit_license, is_published, sort_order,
+              credit_url, credit_license, is_published, sort_order, images_json,
             ] = values
             Object.assign(record, {
               slug, name, tag, short, description, alt, category,
               price_min_ron, price_max_ron, image_key, image_url, credit_author,
-              credit_url, credit_license, is_published, sort_order,
+              credit_url, credit_license, is_published, sort_order, images_json,
             })
           }
           if (query.startsWith('DELETE FROM products')) {
@@ -394,5 +396,57 @@ describe('product Worker API', () => {
     const invalidResponse = await worker.fetch(adminRequest('/api/admin/products', 'POST', invalidBody), env)
     expect(invalidResponse.status).toBe(400)
     expect(purge).not.toHaveBeenCalled()
+  })
+
+  it('persists ordered galleries and fixed prices, updates the cover, and removes only discarded stored images', async () => {
+    await login()
+    const body = new FormData()
+    body.set('product', JSON.stringify({ ...productInput, priceMinRon: 120, priceMaxRon: 120, published: true }))
+    body.set('gallery', JSON.stringify(['/images/first.jpg', '/images/second.jpg']))
+    const createdResponse = await worker.fetch(adminRequest('/api/admin/products', 'POST', body), env)
+    expect(createdResponse.status).toBe(201)
+    const { product } = await createdResponse.json() as { product: { id: string; images: string[]; priceMaxRon: number } }
+    expect(product.images).toEqual(['/images/first.jpg', '/images/second.jpg'])
+    expect(product.priceMaxRon).toBe(120)
+    const retained = `/api/images/${encodeURIComponent(`products/${product.id}/retained.png`)}`
+    const removed = `products/${product.id}/removed.png`
+    records[0].images_json = JSON.stringify([retained, `/api/images/${encodeURIComponent(removed)}`])
+    const update = new FormData()
+    update.set('product', JSON.stringify({ ...productInput, published: true }))
+    update.set('gallery', JSON.stringify(['/images/new-cover.jpg', retained]))
+    const updatedResponse = await worker.fetch(adminRequest(`/api/admin/products/${product.id}`, 'PUT', update), env)
+    expect(updatedResponse.status).toBe(200)
+    expect(await updatedResponse.json()).toMatchObject({
+      product: { imageUrl: '/images/new-cover.jpg', images: ['/images/new-cover.jpg', retained] },
+    })
+    expect(env.IMAGES.delete).toHaveBeenCalledWith(removed)
+    expect(env.IMAGES.delete).not.toHaveBeenCalledWith(`products/${product.id}/retained.png`)
+    await worker.fetch(adminRequest(`/api/admin/products/${product.id}`, 'DELETE'), env)
+    expect(env.IMAGES.delete).toHaveBeenCalledWith(`products/${product.id}/retained.png`)
+  })
+
+  it.each([
+    ['/images/1.jpg', '/images/2.jpg', '/images/3.jpg', '/images/4.jpg', '/images/5.jpg', '/images/6.jpg'],
+    ['/images/duplicate.jpg', '/images/duplicate.jpg'],
+    ['javascript:alert(1)'],
+    ['upload:0'],
+    ['/api/images/products%2Fanother-product%2Fimage.png'],
+  ])('rejects invalid or unowned gallery entries (%j)', async (...entries) => {
+    await login()
+    const body = new FormData()
+    body.set('product', JSON.stringify(productInput))
+    body.set('gallery', JSON.stringify(entries))
+    const response = await worker.fetch(adminRequest('/api/admin/products', 'POST', body), env)
+    expect(response.status).toBe(400)
+    expect(records).toHaveLength(0)
+    expect(env.IMAGES.put).not.toHaveBeenCalled()
+  })
+
+  it('does not allow a published model with an explicitly emptied gallery', async () => {
+    await login()
+    const body = new FormData()
+    body.set('product', JSON.stringify({ ...productInput, imageUrl: '/images/old.jpg', published: true }))
+    body.set('gallery', '[]')
+    expect((await worker.fetch(adminRequest('/api/admin/products', 'POST', body), env)).status).toBe(400)
   })
 })

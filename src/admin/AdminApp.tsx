@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import { Dialog } from '../components/Dialog'
 import { Icon } from '../components/Graphics'
-import type { ProductInput, ProductRow } from '../worker/products'
+import { ProductGallery } from '../components/ProductGallery'
+import { productImages, type ProductInput, type ProductRow } from '../worker/products'
 
 type ProductResponse = {
   products?: ProductRow[]
@@ -16,6 +17,8 @@ type AdminStatus = {
   message: string
   error: boolean
 }
+
+type GalleryPhoto = { id: string; url: string; file?: File }
 
 class AdminAuthenticationError extends Error {
   constructor() {
@@ -67,8 +70,10 @@ function AdminApp() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [focusTagOnOpen, setFocusTagOnOpen] = useState(false)
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState('')
+  const [photos, setPhotos] = useState<GalleryPhoto[]>([])
+  const photosRef = useRef<GalleryPhoto[]>([])
+  const [priceMode, setPriceMode] = useState<'fixed' | 'range'>('range')
+  const [draggedPhoto, setDraggedPhoto] = useState<string | null>(null)
   const [filter, setFilter] = useState<string | null>(null)
   const [reordering, setReordering] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -112,15 +117,46 @@ function AdminApp() {
     return () => { active = false }
   }, [reload])
 
-  function setProductImage(file: File | null, currentUrl: string) {
-    if (imagePreview.startsWith('blob:')) URL.revokeObjectURL(imagePreview)
-    setImageFile(file)
-    setImagePreview(file ? URL.createObjectURL(file) : currentUrl)
+  useEffect(() => () => {
+    photosRef.current.forEach((photo) => { if (photo.file) URL.revokeObjectURL(photo.url) })
+  }, [])
+
+  function replacePhotos(next: GalleryPhoto[]) {
+    photosRef.current.forEach((photo) => {
+      if (photo.file && !next.some((item) => item.id === photo.id)) URL.revokeObjectURL(photo.url)
+    })
+    photosRef.current = next
+    setPhotos(next)
+  }
+
+  function addPhotos(files: File[]) {
+    const message = photos.length + files.length > 5
+      ? 'Poți adăuga maximum 5 fotografii.'
+      : files.some((file) => file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
+        ? 'Alege fotografii JPG, PNG sau WebP, fiecare de maximum 5 MB.'
+        : ''
+    if (message) {
+      setStatus((current) => ({ ...current, message, error: true }))
+      return
+    }
+    replacePhotos([...photos, ...files.map((file) => ({ id: crypto.randomUUID(), url: URL.createObjectURL(file), file }))])
+    setStatus((current) => ({ ...current, message: '', error: false }))
+  }
+
+  function movePhoto(source: string, target: string) {
+    const next = [...photos]
+    const index = next.findIndex((photo) => photo.id === source)
+    const targetIndex = next.findIndex((photo) => photo.id === target)
+    if (index < 0 || targetIndex < 0) return
+    const [photo] = next.splice(index, 1)
+    next.splice(targetIndex, 0, photo)
+    replacePhotos(next)
   }
 
   function editProduct(product: ProductRow, focusTag = false) {
     setEditingId(product.id)
-    setProductImage(null, product.imageUrl)
+    replacePhotos(productImages(product).map((url) => ({ id: crypto.randomUUID(), url })))
+    setPriceMode(product.priceMinRon === product.priceMaxRon ? 'fixed' : 'range')
     setFocusTagOnOpen(focusTag)
     setForm({
       name: product.name,
@@ -144,7 +180,8 @@ function AdminApp() {
 
   function startNewProduct() {
     setEditingId(null)
-    setProductImage(null, '')
+    replacePhotos([])
+    setPriceMode('range')
     setForm(blankProduct(products.reduce((max, product) => Math.max(max, product.sortOrder), 0) + 1))
     setFocusTagOnOpen(false)
     setStatus((current) => ({ ...current, error: false, message: '' }))
@@ -154,7 +191,7 @@ function AdminApp() {
   function closeEditor() {
     setEditorOpen(false)
     setEditingId(null)
-    setProductImage(null, '')
+    replacePhotos([])
     setForm(blankProduct(products.length + 1))
     setFocusTagOnOpen(false)
   }
@@ -165,10 +202,23 @@ function AdminApp() {
 
   async function saveProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!photos.length) {
+      setStatus((current) => ({ ...current, message: 'Adaugă cel puțin o fotografie.', error: true }))
+      return
+    }
     setStatus((current) => ({ ...current, saving: true, message: '', error: false }))
     const body = new FormData()
-    body.set('product', JSON.stringify(form))
-    if (imageFile) body.set('image', imageFile)
+    body.set('product', JSON.stringify({
+      ...form,
+      imageUrl: photos[0]?.file ? '' : photos[0]?.url ?? '',
+      priceMaxRon: priceMode === 'fixed' ? form.priceMinRon : form.priceMaxRon,
+    }))
+    let uploadIndex = 0
+    body.set('gallery', JSON.stringify(photos.map((photo) => {
+      if (!photo.file) return photo.url
+      body.append('images', photo.file)
+      return `upload:${uploadIndex++}`
+    })))
     try {
       const path = editingId ? `/api/admin/products/${editingId}` : '/api/admin/products'
       const payload = await request<ProductResponse>(path, { method: editingId ? 'PUT' : 'POST', body })
@@ -377,7 +427,7 @@ function AdminApp() {
           <h2 id="admin-collection-title">Noul tău <em>prieten drag.</em></h2>
           <p>Editează colecția exact așa cum o văd vizitatorii.</p>
         </div>
-        {status.message && (
+        {status.message && !editorOpen && (
           <p className={status.error ? 'admin-status is-error' : 'admin-status'} role={status.error ? 'alert' : 'status'}>
             {status.message}
           </p>
@@ -434,7 +484,7 @@ function AdminApp() {
                 <div className="design-image admin-design-image">
                   <button type="button" className="admin-card-open" aria-label={`Editează ${product.name}`} onClick={() => editProduct(product)}>
                     {product.imageUrl ? (
-                      <img src={product.imageUrl} alt={product.alt} loading="lazy" />
+                      <ProductGallery images={productImages(product)} alt={product.alt} />
                     ) : (
                       <span className="admin-image-placeholder"><Icon name="gift" size={38} />Adaugă fotografia modelului</span>
                     )}
@@ -489,27 +539,54 @@ function AdminApp() {
         >
           <form className="admin-item-editor" onSubmit={(event) => void saveProduct(event)}>
             <div className={`admin-item-photo ${['peach', 'sage', 'lavender', 'butter', 'blue'][Math.max(0, products.findIndex((product) => product.id === editingId)) % 5]}`}>
-              {imagePreview ? (
-                <img src={imagePreview} alt={form.alt || 'Previzualizare fotografie produs'} />
+              {photos.length > 0 ? (
+                <ProductGallery key={editingId ?? 'new'} images={photos.map((photo) => photo.url)} alt={form.alt || 'Previzualizare fotografie produs'} carousel />
               ) : (
                 <div className="admin-image-placeholder"><Icon name="gift" size={46} />Fotografia modelului</div>
               )}
               <label className="admin-image-upload">
-                <span>{imageFile ? 'Schimbă imaginea' : imagePreview ? 'Înlocuiește imaginea' : 'Adaugă imaginea'}</span>
+                <span>Adaugă fotografii ({photos.length}/5)</span>
                 <input
                   aria-label="Imagine produs"
                   type="file"
+                  multiple
+                  disabled={photos.length >= 5 || status.saving}
                   accept="image/jpeg,image/png,image/webp"
-                  required={!form.imageUrl && !imageFile}
-                  onChange={(event) => setProductImage(event.target.files?.[0] ?? null, form.imageUrl)}
+                  required={photos.length === 0}
+                  onChange={(event) => {
+                    addPhotos(Array.from(event.target.files ?? []))
+                    event.target.value = ''
+                  }}
                 />
               </label>
-              <small>JPG, PNG sau WebP · maximum 5 MB</small>
+              <small>Maximum 5 fotografii · JPG, PNG sau WebP · maximum 5 MB fiecare. Prima este coperta.</small>
+              <ol className="admin-photo-list" aria-label="Ordinea fotografiilor">
+                {photos.map((photo, index) => (
+                  <li key={photo.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+                    event.preventDefault()
+                    const source = draggedPhoto ?? event.dataTransfer.getData('text/plain')
+                    if (source) movePhoto(source, photo.id)
+                    setDraggedPhoto(null)
+                  }}>
+                    <img src={photo.url} alt="" />
+                    <span>{index === 0 ? 'Copertă' : `Fotografia ${index + 1}`}</span>
+                    <button type="button" aria-label={`Mută fotografia ${index + 1} mai sus`} disabled={index === 0 || status.saving} onClick={() => movePhoto(photo.id, photos[index - 1].id)}>↑</button>
+                    <button type="button" aria-label={`Mută fotografia ${index + 1} mai jos`} disabled={index === photos.length - 1 || status.saving} onClick={() => movePhoto(photo.id, photos[index + 1].id)}>↓</button>
+                    <button type="button" draggable={!status.saving} aria-label={`Trage fotografia ${index + 1}`} onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', photo.id)
+                      setDraggedPhoto(photo.id)
+                    }} onDragEnd={() => setDraggedPhoto(null)}>↕</button>
+                    <button type="button" disabled={status.saving} aria-label={`Șterge fotografia ${index + 1}`} onClick={() => replacePhotos(photos.filter((item) => item.id !== photo.id))}>×</button>
+                  </li>
+                ))}
+              </ol>
             </div>
 
             <div className="admin-item-fields">
               <p className="eyebrow">{editingId ? 'DETALII MODEL' : 'MODEL NOU'}</p>
               <h2 id="dialog-title" tabIndex={-1}>{editingId ? 'Editează modelul' : 'Adaugă un model'}</h2>
+              {status.error && status.message && <p className="admin-status is-error" role="alert">{status.message}</p>}
               <label>
                 Etichetă
                 <input ref={tagInputRef} required maxLength={80} value={form.tag} onChange={(event) => setTextField('tag', event.target.value)} />
@@ -546,15 +623,22 @@ function AdminApp() {
                 </datalist>
                 <small id="product-category-help">Scrie o categorie nouă sau alege una existentă.</small>
               </label>
+              <label>
+                Tip preț
+                <select value={priceMode} onChange={(event) => setPriceMode(event.target.value === 'fixed' ? 'fixed' : 'range')}>
+                  <option value="fixed">Preț fix</option>
+                  <option value="range">Interval de preț</option>
+                </select>
+              </label>
               <div className="admin-price-fields">
                 <label>
-                  Preț minim (RON)
+                  {priceMode === 'fixed' ? 'Preț (RON)' : 'Preț minim (RON)'}
                   <input type="number" min="0" step="1" required value={form.priceMinRon} onChange={(event) => setForm((current) => ({ ...current, priceMinRon: Number(event.target.value) }))} />
                 </label>
-                <label>
+                {priceMode === 'range' && <label>
                   Preț maxim (RON)
                   <input type="number" min="0" step="1" required value={form.priceMaxRon} onChange={(event) => setForm((current) => ({ ...current, priceMaxRon: Number(event.target.value) }))} />
-                </label>
+                </label>}
               </div>
               <label className="admin-publish">
                 <input type="checkbox" checked={form.published} onChange={(event) => setForm((current) => ({ ...current, published: event.target.checked }))} />

@@ -61,6 +61,32 @@ test('opens a new item editor with a required image upload', async ({ page }) =>
     mimeType: 'image/png',
     buffer: Buffer.from('preview image'),
   })
-  await expect(imageInput).toHaveJSProperty('files.length', 1)
+
+  await expect(page.locator('.admin-photo-list li')).toHaveCount(1)
+  await expect(page.locator('.admin-item-photo .product-gallery > img')).toHaveAttribute('src', /^blob:/)
   await expect(imageInput).not.toHaveAttribute('required', '')
+})
+
+test('edits fixed pricing and reorders or removes gallery photos', async ({ page }, testInfo) => {
+  await page.getByRole('button', { name: `Editează ${catalogFixture[0].name}`, exact: true }).click()
+  await page.getByLabel('Tip preț').selectOption('fixed')
+  await expect(page.getByLabel('Preț maxim (RON)')).toHaveCount(0)
+  await page.getByLabel('Preț (RON)').fill('120')
+  const buffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64')
+  await page.getByLabel('Imagine produs').setInputFiles([
+    { name: 'first.png', mimeType: 'image/png', buffer },
+    { name: 'second.png', mimeType: 'image/png', buffer },
+  ])
+  await expect(page.locator('.admin-photo-list li')).toHaveCount(3)
+  const thirdPhoto = await page.locator('.admin-photo-list li img').nth(2).getAttribute('src')
+  await page.getByRole('button', { name: 'Trage fotografia 3', exact: true }).dragTo(page.locator('.admin-photo-list li').first())
+  await expect(page.locator('.admin-photo-list li img').first()).toHaveAttribute('src', thirdPhoto!)
+  await page.getByRole('button', { name: 'Mută fotografia 1 mai jos' }).click()
+  await page.getByRole('button', { name: 'Mută fotografia 2 mai sus' }).click()
+  await page.getByRole('button', { name: 'Șterge fotografia 3' }).click()
+  await expect(page.locator('.admin-photo-list li')).toHaveCount(2)
+  await expect(page.locator('.admin-photo-list li').first()).toContainText('Copertă')
+  await expect(page.locator('.admin-photo-list li img').first()).toHaveAttribute('src', /^blob:/)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('admin-gallery.png') })
 })

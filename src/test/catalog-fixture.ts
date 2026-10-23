@@ -88,6 +88,7 @@ export const catalogFixture: ProductRow[] = examples.map((design, index) => ({
     priceMaxRon: 200,
     imageKey: null,
     imageUrl: design.imageUrl,
+    images: [design.imageUrl],
     creditAuthor: design.creditAuthor,
     creditUrl: design.creditUrl,
     creditLicense: design.creditAuthor ? 'CC BY-SA 4.0' : '',

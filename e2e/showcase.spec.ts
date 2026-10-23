@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/')
 })
 
-test('shows photo placeholders and loads catalogue images without horizontal overflow', async ({ page }, testInfo) => {
+test('shows the personal bunny hero and loads catalogue images without horizontal overflow', async ({ page }, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.reload()
@@ -24,9 +24,10 @@ test('shows photo placeholders and loads catalogue images without horizontal ove
   }
   await expect(page).toHaveTitle('Snuggle Stitches | Detalii mici. Bucurii mari.')
   await expect(page.locator('html')).toHaveAttribute('lang', 'ro')
-  await expect(page.getByRole('img', { name: 'Loc rezervat pentru fotografia creațiilor Snuggle Stitches.' })).toBeVisible()
+  await expect(page.getByRole('img', { name: /Iepuraș alb croșetat, în salopetă verde/ })).toBeVisible()
   await expect(page.getByRole('img', { name: 'Loc rezervat pentru o fotografie din atelierul Snuggle Stitches.' })).toBeVisible()
-  await expect(page.locator('.hero-photo img, .story-image-wrap > img')).toHaveCount(0)
+  await expect(page.locator('.hero-photo img')).toHaveCount(1)
+  await expect(page.locator('.story-image-wrap > img')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Credite foto' })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
   const storyPlaceholder = await page.locator('.story-image-placeholder').boundingBox()
@@ -76,6 +77,37 @@ test('filters products by a custom category from the catalogue API', async ({ pa
   await page.getByRole('button', { name: 'Cadouri personalizate' }).click()
   await expect(page.getByRole('button', { name: /^Descoperă / })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Descoperă Cadou personalizat' })).toBeVisible()
+})
+
+test('shows fixed pricing and a controllable photo carousel, with hover cycling in the collection', async ({ page }, testInfo) => {
+  const images = ['/images/bunny-large.jpg', '/images/bear.jpg', '/images/fox.jpg']
+  await page.route('**/api/products', (route) => route.fulfill({
+    json: { products: [{ ...catalogFixture[0], images, priceMinRon: 120, priceMaxRon: 120 }] },
+  }))
+  await page.reload()
+  const card = page.getByRole('button', { name: 'Descoperă Bonnie, iepurașul' })
+  const cardImage = card.getByRole('img')
+  await expect(card.locator('.design-price')).toHaveText('120 RON')
+  if (testInfo.project.name === 'desktop') {
+    await cardImage.hover()
+    await expect(cardImage).toHaveAttribute('src', images[1], { timeout: 4000 })
+    await expect(cardImage).toHaveAttribute('src', images[2], { timeout: 4000 })
+    await page.mouse.move(0, 0)
+    await expect(cardImage).toHaveAttribute('src', images[0])
+  }
+  await card.click()
+  const dialog = page.getByRole('dialog', { name: 'Bonnie, iepurașul' })
+  const photo = dialog.locator('.product-gallery > img')
+  await expect(photo).toHaveAttribute('src', images[0])
+  await expect(dialog.locator('.detail-pricing')).toHaveText('120 RON')
+  await dialog.getByRole('button', { name: 'Fotografia următoare' }).click()
+  await expect(photo).toHaveAttribute('src', images[1])
+  await page.keyboard.press('ArrowRight')
+  await expect(photo).toHaveAttribute('src', images[2])
+  await dialog.getByRole('button', { name: 'Fotografia 1', exact: true }).click()
+  await expect(photo).toHaveAttribute('src', images[0])
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('product-gallery.png') })
 })
 
 test('previews yarn color themes on hover and remembers a clicked theme', async ({ page }) => {
