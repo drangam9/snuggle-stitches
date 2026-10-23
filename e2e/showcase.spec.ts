@@ -88,6 +88,7 @@ test('shows fixed pricing and a controllable photo carousel, with hover cycling 
   const card = page.getByRole('button', { name: 'Descoperă Bonnie, iepurașul' })
   const cardImage = card.getByRole('img')
   await expect(card.locator('.design-price')).toHaveText('120 RON')
+  await expect(cardImage).toHaveCSS('filter', 'none')
   if (testInfo.project.name === 'desktop') {
     await cardImage.hover()
     await expect(cardImage).toHaveAttribute('src', images[1], { timeout: 4000 })
@@ -99,6 +100,7 @@ test('shows fixed pricing and a controllable photo carousel, with hover cycling 
   const dialog = page.getByRole('dialog', { name: 'Bonnie, iepurașul' })
   const photo = dialog.locator('.product-gallery > img')
   await expect(photo).toHaveAttribute('src', images[0])
+  await expect(photo).toHaveCSS('filter', 'none')
   await expect(dialog.locator('.detail-pricing')).toHaveText('120 RON')
   await dialog.getByRole('button', { name: 'Fotografia următoare' }).click()
   await expect(photo).toHaveAttribute('src', images[1])

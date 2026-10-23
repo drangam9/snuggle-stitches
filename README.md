@@ -6,11 +6,11 @@ For a diagram of the frontend-to-Worker-to-database flow, see [ARCHITECTURE.md](
 
 ## Personal creations preview
 
-The 23 October photo batch contains 12 distinct personal creations: three rabbits, three dogs, two cats, a frog, a pink pony, an axolotl and a floral arrangement. They were added to the separate staging database with Romanian names, descriptions, labels, categories and alternative text. Their **75-200 RON prices are provisional, approved for staging only**; do not copy them into production without reviewing the prices and content.
+The 23 October photo batch contains 12 distinct personal creations: three rabbits, three dogs, two cats, a frog, a pink pony, an axolotl and a floral arrangement. They were added to staging and production with Romanian names, descriptions, labels, categories and alternative text. Their **75-200 RON prices were approved for both environments on 23 October 2026**.
 
-Optimized, metadata-free JPEGs are in [public/images/creatii](./public/images/creatii/). The welcome section uses a dedicated crop of the white rabbit in green overalls, retaining the decorative grass. Original source photos remain unchanged in `public/snuggle-stitches-items-2/`, which is excluded from Cloudflare asset uploads by [public/.assetsignore](./public/.assetsignore). The catalogue photos use static `/images/creatii/` URLs; subsequent admin uploads still use R2.
+Optimized, metadata-free JPEGs are in [public/images/creatii](./public/images/creatii/). The deployed welcome section uses a dedicated crop of the white rabbit in green overalls, retaining the decorative grass. Original source photos remain unchanged in `public/snuggle-stitches-items-2/`, which is excluded from Cloudflare asset uploads by [public/.assetsignore](./public/.assetsignore). The catalogue photos use static `/images/creatii/` URLs; subsequent admin uploads still use R2.
 
-The content import was performed explicitly against staging, not added to automatic database migrations. Production's existing collection was not changed. The staging content remains editable through its admin page; promotion requires separate approval and a reviewed content import, in addition to deploying the frontend.
+The content imports were performed explicitly against each environment, not added to automatic database migrations. Existing products were preserved; the imports are not part of future migrations. Both collections remain editable through their respective admin pages.
 
 ## Product pricing and photo galleries
 
