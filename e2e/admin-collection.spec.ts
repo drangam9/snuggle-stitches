@@ -43,7 +43,7 @@ test('reorders collection cards and persists the order', async ({ page }) => {
 test('supports dragging a card to a new collection position', async ({ page }) => {
   const cardNames = page.locator('.admin-design-grid .design-card h3')
   await page.getByRole('button', { name: `Trage pentru a reordona ${catalogFixture[1].name}` })
-    .dragTo(page.locator('.admin-design-grid .design-card').first())
+    .dragTo(page.locator('.admin-design-grid .design-card').first().locator('.admin-card-reorder'))
 
   await expect(page.getByRole('status')).toHaveText('Ordinea colecției a fost salvată.')
   await expect(cardNames.first()).toHaveText(catalogFixture[1].name)
@@ -79,7 +79,13 @@ test('edits fixed pricing and reorders or removes gallery photos', async ({ page
   ])
   await expect(page.locator('.admin-photo-list li')).toHaveCount(3)
   const thirdPhoto = await page.locator('.admin-photo-list li img').nth(2).getAttribute('src')
-  await page.getByRole('button', { name: 'Trage fotografia 3', exact: true }).dragTo(page.locator('.admin-photo-list li').first())
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Mută fotografia 3 mai sus' }).click()
+    await page.getByRole('button', { name: 'Mută fotografia 2 mai sus' }).click()
+  } else {
+    await page.getByRole('button', { name: 'Trage fotografia 3', exact: true })
+      .dragTo(page.locator('.admin-photo-list li').first())
+  }
   await expect(page.locator('.admin-photo-list li img').first()).toHaveAttribute('src', thirdPhoto!)
   await page.getByRole('button', { name: 'Mută fotografia 1 mai jos' }).click()
   await page.getByRole('button', { name: 'Mută fotografia 2 mai sus' }).click()
